@@ -7,6 +7,7 @@ import platform
 import urllib.request
 import tarfile
 import stat
+import zipfile
 
 # Page configuration
 st.set_page_config(
@@ -96,6 +97,44 @@ with col1:
 
                     ffmpeg_available = ensure_ffmpeg()
 
+                    # Try to ensure a JavaScript runtime (deno) for yt-dlp EJS
+                    def ensure_deno():
+                        # Return path to deno binary or None
+                        deno_path = shutil.which("deno")
+                        if deno_path:
+                            return deno_path
+                        sys = platform.system().lower()
+                        machine = platform.machine().lower()
+                        if sys != "linux" or ("64" not in machine and machine != "x86_64"):
+                            return None
+
+                        dn_dir = os.path.join(".deno")
+                        dn_bin = os.path.join(dn_dir, "deno")
+                        if os.path.exists(dn_bin) and os.access(dn_bin, os.X_OK):
+                            os.environ["PATH"] = dn_dir + os.pathsep + os.environ.get("PATH", "")
+                            return dn_bin
+
+                        try:
+                            os.makedirs(dn_dir, exist_ok=True)
+                            url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+                            archive_path = os.path.join(dn_dir, "deno.zip")
+                            urllib.request.urlretrieve(url, archive_path)
+                            with zipfile.ZipFile(archive_path, "r") as zf:
+                                for name in zf.namelist():
+                                    if os.path.basename(name) == "deno":
+                                        zf.extract(name, dn_dir)
+                                        extracted = os.path.join(dn_dir, name)
+                                        # Move to dn_bin
+                                        os.replace(extracted, dn_bin)
+                                        os.chmod(dn_bin, os.stat(dn_bin).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                                        os.environ["PATH"] = dn_dir + os.pathsep + os.environ.get("PATH", "")
+                                        return dn_bin
+                            return None
+                        except Exception:
+                            return None
+
+                    deno_path = ensure_deno()
+
                     if ffmpeg_available:
                         format_option = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
                         sort_args = ["-S", "res,fps,codec:h264:m4a"]
@@ -105,9 +144,14 @@ with col1:
                         sort_args = []
 
                     # Build yt-dlp command with appropriate flags
+                    js_args = []
+                    if deno_path:
+                        js_args = ["--js-runtimes", f"deno:{deno_path}"]
+
                     if download_type == "Playlist":
                         command = [
                             "yt-dlp",
+                        ] + js_args + [
                             "-f", format_option,
                         ] + sort_args + [
                             "-o", f"{downloads_dir}/%(playlist_title)s/%(title)s.%(ext)s",
@@ -118,6 +162,7 @@ with col1:
                     else:
                         command = [
                             "yt-dlp",
+                        ] + js_args + [
                             "-f", format_option,
                         ] + sort_args + [
                             "-o", f"{downloads_dir}/%(title)s.%(ext)s",
